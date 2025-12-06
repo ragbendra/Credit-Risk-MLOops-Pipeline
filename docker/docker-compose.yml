@@ -1,0 +1,109 @@
+# Docker Compose for Credit Risk MLOps Stack
+#
+# Services:
+# - api: FastAPI prediction service
+# - mlflow: MLflow tracking server
+# - postgres: PostgreSQL database for MLflow
+#
+# Usage:
+#   docker-compose up -d        # Start all services
+#   docker-compose down         # Stop all services
+#   docker-compose logs -f api  # View API logs
+
+version: "3.8"
+
+services:
+  # ===========================================
+  # FastAPI Prediction Service
+  # ===========================================
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: credit-risk-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - mlops-network
+
+  # ===========================================
+  # MLflow Tracking Server
+  # ===========================================
+  mlflow:
+    image: python:3.11-slim
+    container_name: credit-risk-mlflow
+    command: >
+      bash -c "pip install mlflow psycopg2-binary &&
+               mlflow server 
+               --host 0.0.0.0 
+               --port 5000 
+               --backend-store-uri postgresql://mlflow:mlflow@postgres:5432/mlflow
+               --default-artifact-root /mlflow/artifacts"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - mlops-network
+
+  # ===========================================
+  # PostgreSQL Database (MLflow backend)
+  # ===========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: credit-risk-postgres
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U mlflow -d mlflow" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - mlops-network
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  mlflow_artifacts:
+    driver: local
+  postgres_data:
+    driver: local
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  mlops-network:
+    driver: bridge
